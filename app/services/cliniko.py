@@ -131,5 +131,39 @@ class ClinikoClient:
         }
         return await self._request("POST", "/individual_appointments", json=payload)
 
+    async def get_patients_by_phone(self, phone_number: str) -> list[dict[str, Any]]:
+        """Look up patients whose phone number contains the given number."""
+        params = [("q[]", f"phone_numbers.number:contains:{phone_number}")]
+        data = await self._request("GET", "/patients", params=params)
+        patients = data.get("patients", [])
+        return [
+            {"id": patient.get("id"), "first_name": patient.get("first_name"), "last_name": patient.get("last_name")}
+            for patient in patients
+        ]
+
+    async def create_patient(self, first_name: str, last_name: str, phone_number: str) -> int:
+        """Create a new patient record and return its Cliniko patient ID."""
+        payload = {
+            "first_name": first_name,
+            "last_name": last_name,
+            "patient_phone_numbers": [{"number": phone_number, "phone_type": "Mobile"}],
+        }
+        data = await self._request("POST", "/patients", json=payload)
+        return data["id"]
+
+    async def get_appointment_types(self) -> list[dict[str, Any]]:
+        """Fetch active appointment types (clinic services)."""
+        data = await self._request("GET", "/appointment_types")
+        appointment_types = data.get("appointment_types", [])
+        return [
+            {
+                "id": appointment_type.get("id"),
+                "name": appointment_type.get("name"),
+                "duration_in_minutes": appointment_type.get("duration_in_minutes"),
+            }
+            for appointment_type in appointment_types
+            if not appointment_type.get("archived_at")
+        ]
+
 
 cliniko_client = ClinikoClient()
