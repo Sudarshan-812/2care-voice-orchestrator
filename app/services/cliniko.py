@@ -105,12 +105,16 @@ class ClinikoClient:
         """Fetch the list of practitioners (doctors)."""
         return await self._request("GET", "/practitioners")
 
-    async def get_appointments(self, start_date: str, end_date: str) -> dict[str, Any]:
+    async def get_appointments(
+        self, start_date: str, end_date: str, business_id: Optional[int] = None
+    ) -> dict[str, Any]:
         """Fetch individual appointments starting after start_date and ending before end_date."""
         params = [
             ("q[]", f"starts_at:>{start_date}"),
             ("q[]", f"ends_at:<{end_date}"),
         ]
+        if business_id is not None:
+            params.append(("q[]", f"business_id:{business_id}"))
         return await self._request("GET", "/individual_appointments", params=params)
 
     async def book_appointment(
@@ -118,6 +122,7 @@ class ClinikoClient:
         patient_id: int,
         practitioner_id: int,
         appointment_type_id: int,
+        business_id: int,
         start_time: str,
         end_time: str,
     ) -> dict[str, Any]:
@@ -126,6 +131,7 @@ class ClinikoClient:
             "patient_id": patient_id,
             "practitioner_id": practitioner_id,
             "appointment_type_id": appointment_type_id,
+            "business_id": business_id,
             "starts_at": start_time,
             "ends_at": end_time,
         }
@@ -163,6 +169,20 @@ class ClinikoClient:
             }
             for appointment_type in appointment_types
             if not appointment_type.get("archived_at")
+        ]
+
+    async def get_businesses(self) -> list[dict[str, Any]]:
+        """Fetch clinic locations (Cliniko 'Businesses')."""
+        data = await self._request("GET", "/businesses")
+        businesses = data.get("businesses", [])
+        return [
+            {
+                "id": business.get("id"),
+                "name": business.get("business_name"),
+                "city": business.get("city"),
+                "address": business.get("address_1"),
+            }
+            for business in businesses
         ]
 
 

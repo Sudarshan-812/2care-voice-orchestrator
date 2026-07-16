@@ -7,6 +7,7 @@ from openai import AsyncOpenAI
 
 from app.core.config import settings
 from app.services.cliniko import ClinikoAPIError, cliniko_client
+from app.services.db import db
 
 logger = logging.getLogger(__name__)
 
@@ -19,6 +20,7 @@ SYSTEM_PROMPT = """You are a receptionist for a multi-branch clinic.
 - ALWAYS ask for the caller's full name before booking an appointment.
 - If the caller changes their requested time at any point, you MUST call `check_availability` again for the new time. Do not rely on the results of a previous `check_availability` call.
 - You must only book appointments for the services listed in your context. Use the exact appointment_type_id provided.
+- You manage bookings across multiple branches. The available branches are listed in your context. When a user asks for the earliest slot, you MUST check availability across ALL branches if they do not specify one, and explicitly tell them which branch has the opening.
 """
 
 TOOLS: list[dict[str, Any]] = [
@@ -45,6 +47,13 @@ TOOLS: list[dict[str, Any]] = [
                     "time_preference": {
                         "type": "string",
                         "description": "The caller's preferred time of day, e.g. 'morning', 'afternoon', '3pm'.",
+                    },
+                    "business_id": {
+                        "type": "integer",
+                        "description": (
+                            "If the user specifies a location, provide the business_id. If they "
+                            "want the earliest slot anywhere, omit this to search all branches."
+                        ),
                     },
                 },
                 "required": ["start_date", "end_date", "time_preference"],
@@ -73,6 +82,13 @@ TOOLS: list[dict[str, Any]] = [
                             "exactly from the list of services provided in your context."
                         ),
                     },
+                    "business_id": {
+                        "type": "integer",
+                        "description": (
+                            "The Cliniko business ID for the branch the appointment is booked "
+                            "at, taken exactly from the list of branches in your context."
+                        ),
+                    },
                     "start_time": {"type": "string", "description": "ISO 8601 appointment start time."},
                     "end_time": {"type": "string", "description": "ISO 8601 appointment end time."},
                 },
@@ -82,6 +98,7 @@ TOOLS: list[dict[str, Any]] = [
                     "phone_number",
                     "practitioner_id",
                     "appointment_type_id",
+                    "business_id",
                     "start_time",
                     "end_time",
                 ],
@@ -155,6 +172,7 @@ class LlmClient:
                 result = await cliniko_client.get_appointments(
                     start_date=arguments["start_date"],
                     end_date=arguments["end_date"],
+                    business_id=arguments.get("business_id"),
                 )
             elif name == "book_appointment":
                 result = await self._book_appointment(arguments)
@@ -194,6 +212,17 @@ class LlmClient:
         return await cliniko_client.create_patient(first_name, last_name, phone_number)
 
     async def _book_appointment(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        lock_acquired = await db.acquire_slot_lock(
+            arguments["start_time"], arguments["business_id"], arguments["practitioner_id"]
+        )
+        if not lock_acquired:
+            return {
+                "error": (
+                    "Race condition detected. This slot was just booked by another user. "
+                    "Apologize and offer the next available slot."
+                )
+            }
+
         patient_id = await self._resolve_patient_id(
             arguments["first_name"], arguments["last_name"], arguments["phone_number"]
         )
@@ -201,6 +230,7 @@ class LlmClient:
             patient_id=patient_id,
             practitioner_id=arguments["practitioner_id"],
             appointment_type_id=arguments["appointment_type_id"],
+            business_id=arguments["business_id"],
             start_time=arguments["start_time"],
             end_time=arguments["end_time"],
         )

@@ -1,14 +1,18 @@
 import logging
 import time
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from app.services.cliniko import ClinikoAPIError, cliniko_client
+from app.services.db import db
 from app.services.llm import llm_client
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+RECOVERY_WINDOW = timedelta(minutes=15)
 
 
 @router.websocket("/llm-websocket/{call_id}")
@@ -17,6 +21,7 @@ async def llm_websocket(websocket: WebSocket, call_id: str) -> None:
     logger.info("WebSocket connection accepted for call_id=%s", call_id)
 
     call_context: str | None = None
+    from_number: str | None = None
 
     try:
         while True:
@@ -35,6 +40,24 @@ async def llm_websocket(websocket: WebSocket, call_id: str) -> None:
                 )
 
                 context_parts: list[str] = []
+
+                if from_number:
+                    previous_state = await db.get_call_state(from_number)
+                    if previous_state and previous_state["status"] == "active":
+                        elapsed = datetime.now(timezone.utc) - previous_state["last_updated"]
+                        if elapsed < RECOVERY_WINDOW:
+                            context_parts.append(
+                                "The previous call dropped unexpectedly. You already have "
+                                f"context: {previous_state['context_snapshot']}. Apologize for "
+                                "the disconnect and resume where you left off."
+                            )
+                            logger.warning(
+                                "Recovered dropped call for call_id=%s from=%s previous_call_id=%s elapsed=%s",
+                                call_id,
+                                from_number,
+                                previous_state["call_id"],
+                                elapsed,
+                            )
 
                 if from_number:
                     try:
@@ -77,6 +100,19 @@ async def llm_websocket(websocket: WebSocket, call_id: str) -> None:
                         "Loaded %d appointment types for call_id=%s", len(appointment_types), call_id
                     )
 
+                try:
+                    businesses = await cliniko_client.get_businesses()
+                except ClinikoAPIError as exc:
+                    logger.error("Failed to fetch businesses for call_id=%s: %s", call_id, exc)
+                    businesses = []
+
+                if businesses:
+                    branches = ", ".join(f"ID {b['id']} ({b['name']})" for b in businesses)
+                    context_parts.append(
+                        f"The clinic has the following locations (branches): {branches}."
+                    )
+                    logger.info("Loaded %d branches for call_id=%s", len(businesses), call_id)
+
                 call_context = " ".join(context_parts) or None
 
             elif interaction_type == "ping":
@@ -114,6 +150,9 @@ async def llm_websocket(websocket: WebSocket, call_id: str) -> None:
                     message,
                 )
 
+            if from_number:
+                await db.upsert_call_state(call_id, from_number, "active", call_context)
+
             elapsed_ms = (time.monotonic() - start) * 1000
             logger.info(
                 "Processed interaction_type=%s call_id=%s in %.1fms",
@@ -124,3 +163,5 @@ async def llm_websocket(websocket: WebSocket, call_id: str) -> None:
 
     except WebSocketDisconnect:
         logger.info("WebSocket disconnected for call_id=%s", call_id)
+        if from_number:
+            await db.upsert_call_state(call_id, from_number, "completed", call_context)
