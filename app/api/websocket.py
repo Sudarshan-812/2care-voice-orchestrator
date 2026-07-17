@@ -41,6 +41,9 @@ async def llm_websocket(websocket: WebSocket, call_id: str) -> None:
 
                 context_parts: list[str] = []
 
+                current_datetime_str = datetime.now().strftime("%A, %B %d, %Y, %I:%M %p")
+                context_parts.append(f"Today is {current_datetime_str}.")
+
                 if from_number:
                     previous_state = await db.get_call_state(from_number)
                     if previous_state and previous_state["status"] == "active":
