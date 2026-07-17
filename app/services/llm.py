@@ -11,7 +11,7 @@ from app.services.db import db
 
 logger = logging.getLogger(__name__)
 
-aclient = AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
+aclient = AsyncOpenAI(api_key=settings.GROQ_API_KEY, base_url="https://api.groq.com/openai/v1")
 
 SYSTEM_PROMPT = """You are a receptionist for a multi-branch clinic.
 
@@ -134,7 +134,7 @@ class LlmClient:
         tool_calls_acc: dict[int, dict[str, Any]] = {}
 
         stream = await aclient.chat.completions.create(
-            model="gpt-4o",
+            model="llama-3.1-70b-versatile",
             messages=messages,
             tools=TOOLS,
             stream=True,

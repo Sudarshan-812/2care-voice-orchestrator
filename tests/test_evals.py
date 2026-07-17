@@ -1,9 +1,11 @@
 """Automated evaluation harness for the Retell/GPT-4o agent's prompt behavior.
 
-These are *evals*, not unit tests: they make real calls to gpt-4o via
-LlmClient.draft_response to prove the live prompt + tool-schema combination
-still behaves correctly before it ships. A real OPENAI_API_KEY is required
-(see tests/conftest.py). Cliniko/DB access is stubbed out by patching
+These are *evals*, not unit tests: they make real calls to Groq's
+llama-3.1-70b-versatile via LlmClient.draft_response to prove the live
+prompt + tool-schema combination still behaves correctly before it ships.
+A real GROQ_API_KEY is required (see tests/conftest.py, which currently
+seeds a dummy value that will cause these evals to fail auth against the
+live API unless overridden). Cliniko/DB access is stubbed out by patching
 LlmClient._execute_tool, so we can inspect exactly which tool the model
 chose to call and with what arguments, without needing live Cliniko creds.
 """

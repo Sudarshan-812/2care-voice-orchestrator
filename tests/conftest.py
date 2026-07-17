@@ -2,9 +2,8 @@ import os
 
 # app.core.config.Settings validates eagerly on import and requires every field.
 # The eval harness only exercises LLM/prompt behavior, so seed harmless defaults
-# for the settings it doesn't touch. OPENAI_API_KEY is deliberately left alone:
-# the evals make real calls to the model, so a real key must come from the
-# environment or a local .env file.
+# for the settings it doesn't touch.
+os.environ.setdefault("GROQ_API_KEY", "dummy_groq_key")
 os.environ.setdefault("RETELL_API_KEY", "test-retell-key")
 os.environ.setdefault("CLINIKO_API_KEY", "test-cliniko-key")
 os.environ.setdefault("CLINIKO_SHARD", "au4")
