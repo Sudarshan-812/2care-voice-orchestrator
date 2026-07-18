@@ -8,16 +8,29 @@ seeds a dummy value that will cause these evals to fail auth against the
 live API unless overridden). Cliniko/DB access is stubbed out by patching
 LlmClient._execute_tool, so we can inspect exactly which tool the model
 chose to call and with what arguments, without needing live Cliniko creds.
+
+business_id/practitioner_id/appointment_type_id are all strictly required
+on check_availability now (see app/services/llm.py) — there is no "search
+all branches" shorthand and no silent ID defaulting. Both evals' caller
+utterances name a specific branch/service so the model has everything it
+needs to act in a single turn, since this harness only drives one turn.
 """
 
 import asyncio
 import json
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
 from app.services.llm import LlmClient
 
 EVAL_TIMEOUT_SECONDS = 30
+
+CLINIC_CONTEXT = (
+    "Branches: ID 1 (Downtown), ID 2 (Uptown). "
+    "Practitioners: ID 10 (Dr. Asha Rao). "
+    "Services: ID 20 (General Consultation, 30 mins)."
+)
 
 
 class MockWebSocket:
@@ -49,11 +62,7 @@ async def test_eval_cross_branch_search(monkeypatch):
 
     async def fake_execute_tool(name: str, arguments: dict) -> dict:
         captured_tool_calls.append((name, arguments))
-        return {
-            "available_slots": [
-                {"business_id": 2, "practitioner_id": 5, "start_time": "2026-07-18T09:00:00Z"}
-            ]
-        }
+        return {"available_times": [{"appointment_start": "2026-07-19T09:00:00+00:00"}]}
 
     monkeypatch.setattr(llm_client, "_execute_tool", fake_execute_tool)
 
@@ -63,31 +72,33 @@ async def test_eval_cross_branch_search(monkeypatch):
             {
                 "role": "user",
                 "content": (
-                    "I need the earliest available appointment you have. "
-                    "I don't care which clinic."
+                    "I need the earliest available general consultation you have. "
+                    "I don't care which clinic — check every branch."
                 ),
             }
         ],
     }
 
-    await run_draft_response(
-        llm_client,
-        request,
-        mock_ws,
-        clinic_context="Branches: ID 1 (Downtown), ID 2 (Uptown)",
-    )
+    await run_draft_response(llm_client, request, mock_ws, clinic_context=CLINIC_CONTEXT)
 
-    assert captured_tool_calls, (
-        f"Expected the model to call a tool, but none was called. "
+    availability_calls = [args for name, args in captured_tool_calls if name == "check_availability"]
+    assert availability_calls, (
+        f"Expected the model to call check_availability, but none was called. "
         f"Assembled response: {assembled_text(mock_ws)!r}"
     )
 
-    tool_name, tool_args = captured_tool_calls[0]
-    assert tool_name == "check_availability"
-    assert "business_id" not in tool_args, (
-        "business_id should be omitted to search across all branches, "
-        f"but got arguments: {json.dumps(tool_args)}"
+    checked_business_ids = {call.get("business_id") for call in availability_calls}
+    assert checked_business_ids == {1, 2}, (
+        "business_id is now required on check_availability — there's no 'search all "
+        "branches' shorthand, so the model must call it once per known branch. Expected "
+        f"business_ids {{1, 2}}, got {checked_business_ids}. Calls: {json.dumps(availability_calls)}"
     )
+
+    for call in availability_calls:
+        assert call.get("practitioner_id") is not None, f"Missing practitioner_id: {json.dumps(call)}"
+        assert call.get("appointment_type_id") is not None, (
+            f"Missing appointment_type_id: {json.dumps(call)}"
+        )
 
 
 @pytest.mark.asyncio
@@ -96,14 +107,12 @@ async def test_eval_code_switching(monkeypatch):
     mock_ws = MockWebSocket()
 
     captured_tool_calls: list[tuple[str, dict]] = []
+    today = datetime.now(timezone.utc)
+    tomorrow = (today + timedelta(days=1)).strftime("%Y-%m-%d")
 
     async def fake_execute_tool(name: str, arguments: dict) -> dict:
         captured_tool_calls.append((name, arguments))
-        return {
-            "available_slots": [
-                {"business_id": 1, "practitioner_id": 3, "start_time": "2026-07-18T14:00:00Z"}
-            ]
-        }
+        return {"available_times": [{"appointment_start": f"{tomorrow}T14:00:00+00:00"}]}
 
     monkeypatch.setattr(llm_client, "_execute_tool", fake_execute_tool)
 
@@ -113,7 +122,8 @@ async def test_eval_code_switching(monkeypatch):
             {
                 "role": "user",
                 "content": (
-                    "Hi, mera naam Rahul hai, can I get an appointment for tomorrow afternoon?"
+                    "Hi, mera naam Rahul hai, mujhe general consultation ke liye kal "
+                    "afternoon ka appointment chahiye Downtown clinic mein."
                 ),
             }
         ],
@@ -124,7 +134,8 @@ async def test_eval_code_switching(monkeypatch):
         request,
         mock_ws,
         clinic_context=(
-            "Today's date is 2026-07-17. Rahul is a returning patient at this clinic."
+            f"Today's date is {today.strftime('%A, %B %d, %Y')}. "
+            f"Rahul is a returning patient at this clinic. {CLINIC_CONTEXT}"
         ),
     )
 
@@ -135,12 +146,15 @@ async def test_eval_code_switching(monkeypatch):
         f"the caller, but got a purely English-sounding response: {text!r}"
     )
 
-    assert captured_tool_calls, (
+    availability_calls = [args for name, args in captured_tool_calls if name == "check_availability"]
+    assert availability_calls, (
         f"Expected the model to call check_availability. Assembled response: {text!r}"
     )
-    tool_name, tool_args = captured_tool_calls[0]
-    assert tool_name == "check_availability"
+    tool_args = availability_calls[0]
     assert tool_args.get("time_preference", "").lower() == "afternoon"
-    assert "2026-07-18" in tool_args.get("start_date", ""), (
-        f"Expected the search window to target tomorrow (2026-07-18), got: {json.dumps(tool_args)}"
+    assert tool_args.get("business_id") == 1
+    assert tool_args.get("practitioner_id") is not None
+    assert tool_args.get("appointment_type_id") is not None
+    assert tomorrow in tool_args.get("start_date", ""), (
+        f"Expected the search window to target tomorrow ({tomorrow}), got: {json.dumps(tool_args)}"
     )

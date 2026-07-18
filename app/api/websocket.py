@@ -116,6 +116,21 @@ async def llm_websocket(websocket: WebSocket, call_id: str) -> None:
                     )
                     logger.info("Loaded %d branches for call_id=%s", len(businesses), call_id)
 
+                try:
+                    practitioners = await cliniko_client.get_practitioners()
+                except ClinikoAPIError as exc:
+                    logger.error("Failed to fetch practitioners for call_id=%s: %s", call_id, exc)
+                    practitioners = []
+
+                if practitioners:
+                    doctors = ", ".join(
+                        f"ID {p['id']} ({p['first_name']} {p['last_name']})" for p in practitioners
+                    )
+                    context_parts.append(f"The clinic's practitioners are: {doctors}.")
+                    logger.info(
+                        "Loaded %d practitioners for call_id=%s", len(practitioners), call_id
+                    )
+
                 call_context = " ".join(context_parts) or None
 
             elif interaction_type == "ping":

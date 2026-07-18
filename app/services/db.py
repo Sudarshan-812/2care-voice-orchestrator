@@ -89,6 +89,19 @@ class DatabaseManager:
         )
         return dict(row) if row is not None else None
 
+    async def release_slot_lock(self, slot_time: str, business_id: int, practitioner_id: int) -> None:
+        """Release a slot lock, e.g. after a failed booking attempt that never completed."""
+        assert self.pool is not None
+        await self.pool.execute(
+            """
+            DELETE FROM appointment_locks
+            WHERE slot_time = $1 AND business_id = $2 AND practitioner_id = $3
+            """,
+            _parse_iso(slot_time),
+            business_id,
+            practitioner_id,
+        )
+
     async def acquire_slot_lock(self, slot_time: str, business_id: int, practitioner_id: int) -> bool:
         """Attempt to claim an appointment slot. Returns False if another request already holds it."""
         assert self.pool is not None

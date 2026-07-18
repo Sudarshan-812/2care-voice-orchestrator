@@ -101,24 +101,39 @@ class ClinikoClient:
         )
         return response.json()
 
-    async def get_practitioners(self) -> dict[str, Any]:
-        """Fetch the list of practitioners (doctors)."""
-        return await self._request("GET", "/practitioners")
-
-    async def get_appointments(
-        self, start_date: str, end_date: str, business_id: Optional[int] = None
-    ) -> dict[str, Any]:
-        """Fetch individual appointments starting after start_date and ending before end_date."""
-        params = [
-            ("q[]", f"starts_at:>{start_date}"),
-            ("q[]", f"ends_at:<{end_date}"),
+    async def get_practitioners(self) -> list[dict[str, Any]]:
+        """Fetch active practitioners (doctors)."""
+        data = await self._request("GET", "/practitioners")
+        practitioners = data.get("practitioners", [])
+        return [
+            {
+                "id": practitioner.get("id"),
+                "first_name": practitioner.get("first_name"),
+                "last_name": practitioner.get("last_name"),
+            }
+            for practitioner in practitioners
+            if not practitioner.get("archived_at")
         ]
-        if business_id is not None:
-            params.append(("q[]", f"business_id:{business_id}"))
-        data = await self._request("GET", "/individual_appointments", params=params)
-        data.pop("links", None)
-        data.pop("total_entries", None)
-        return data
+
+    async def get_available_times(
+        self,
+        business_id: int,
+        practitioner_id: int,
+        appointment_type_id: int,
+        from_date: str,
+        to_date: str,
+    ) -> list[dict[str, Any]]:
+        """Fetch real bookable slots from Cliniko's available_times endpoint.
+
+        This reflects the practitioner's actual working hours and existing bookings —
+        no gap-inference or mocking. from_date/to_date are plain dates (YYYY-MM-DD).
+        """
+        path = (
+            f"/businesses/{business_id}/practitioners/{practitioner_id}"
+            f"/appointment_types/{appointment_type_id}/available_times"
+        )
+        data = await self._request("GET", path, params={"from": from_date, "to": to_date})
+        return data.get("available_times", [])
 
     async def book_appointment(
         self,

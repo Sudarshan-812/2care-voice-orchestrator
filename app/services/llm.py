@@ -1,7 +1,7 @@
 import json
 import logging
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from typing import Any
 
 from openai import AsyncOpenAI
@@ -18,14 +18,15 @@ SYSTEM_PROMPT = """You are a receptionist for a multi-branch clinic.
 
 - You speak naturally in English and Hindi. If the caller code-switches (mixes English and Hindi in the same conversation or sentence), you must reply in that exact same conversational mix — match their language blend, do not force pure English or pure Hindi.
 - NEVER guess or assume appointment availability. ALWAYS call the `check_availability` tool whenever the caller asks about or proposes a time.
+- Always read the current date from the "Today is..." line in your context and use that exact year when computing start_date/end_date (and any other date) for `check_availability`, `book_appointment`, and `reschedule_appointment`. Never reuse a year from an example in a tool description, and never assume a year from your own training data.
+- `check_availability`, `book_appointment`, and `reschedule_appointment` all require an exact business_id, practitioner_id, and appointment_type_id. NEVER guess or default any of these — there is no "default branch" or "default doctor". If the caller hasn't told you which branch, which practitioner, or which service they want, you MUST ask them before calling any of these tools. Use the branch list, practitioner list, and service list in your context to offer real choices by name.
 - ALWAYS ask for the caller's full name before booking an appointment.
 - If the caller changes their requested time to something different from what you last checked, you MUST call `check_availability` again for the new time. Do not call `check_availability` again just to re-confirm a slot you already offered and the caller already accepted — re-stating or confirming the same time is not a change.
 - You must only book appointments for the services listed in your context. Use the exact appointment_type_id provided.
-- You manage bookings across multiple branches. The available branches are listed in your context. When a user asks for the earliest slot, you MUST check availability across ALL branches if they do not specify one, and explicitly tell them which branch has the opening.
+- You manage bookings across multiple branches. The available branches are listed in your context. If the caller doesn't care which branch, call `check_availability` once per branch listed in your context (each call still needs a real practitioner_id and appointment_type_id) and tell them which branch has the earliest opening. There is no way to search "all branches" in a single call.
 - If the caller wants to cancel or reschedule an existing appointment and you do not already know its appointment_id, call `get_patient_appointments` first to look up their bookings and confirm which one they mean before acting.
-- To reschedule an appointment, you MUST first call `cancel_appointment` on the existing appointment, and only then call `check_availability` and `book_appointment` for the new slot. Never book the new slot before the old one is cancelled.
+- To reschedule an appointment, call the single `reschedule_appointment` tool with the existing appointment_id plus the new slot's details. Do NOT call `cancel_appointment` and `book_appointment` separately for a reschedule — `reschedule_appointment` handles the safe ordering (book the new slot, then cancel the old one) itself.
 - Once you have offered a slot and the user has provided their name and phone number to book it, you MUST immediately call the `book_appointment` tool. DO NOT call `check_availability` again.
-- When the user confirms they want to book, YOU MUST call `book_appointment`. If they did not specify a branch, assume they want Downtown Clinic.
 """
 
 TOOLS: list[dict[str, Any]] = [
@@ -34,35 +35,66 @@ TOOLS: list[dict[str, Any]] = [
         "function": {
             "name": "check_availability",
             "description": (
-                "Check practitioner availability for a date range and time preference. "
-                "Always call this before telling the caller a time is available, and call "
-                "it again any time the requested time changes."
+                "Check REAL practitioner availability (their actual working hours and "
+                "existing bookings) for a date range and time preference, at one specific "
+                "branch and with one specific practitioner. business_id, practitioner_id, "
+                "and appointment_type_id are all required — never guess them; ask the "
+                "caller if any are unknown. To check multiple branches, call this once per "
+                "branch."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
+                    "business_id": {
+                        "type": "integer",
+                        "description": (
+                            "The Cliniko business ID for the branch to check, taken exactly "
+                            "from the branch list in your context."
+                        ),
+                    },
+                    "practitioner_id": {
+                        "type": "integer",
+                        "description": (
+                            "The Cliniko practitioner ID for the doctor to check, taken "
+                            "exactly from the practitioner list in your context."
+                        ),
+                    },
+                    "appointment_type_id": {
+                        "type": "integer",
+                        "description": (
+                            "The Cliniko appointment type ID for the requested service, "
+                            "taken exactly from the service list in your context."
+                        ),
+                    },
                     "start_date": {
                         "type": "string",
-                        "description": "ISO 8601 start of the search window, e.g. 2024-06-01T00:00:00Z",
+                        "description": (
+                            "ISO 8601 start of the search window. Use the current year from "
+                            "the 'Today is...' date in your context, never a year from an "
+                            "example, e.g. 2026-06-01T00:00:00Z."
+                        ),
                     },
                     "end_date": {
                         "type": "string",
-                        "description": "ISO 8601 end of the search window, e.g. 2024-06-02T00:00:00Z",
+                        "description": (
+                            "ISO 8601 end of the search window. Use the current year from "
+                            "the 'Today is...' date in your context, never a year from an "
+                            "example, e.g. 2026-06-02T00:00:00Z."
+                        ),
                     },
                     "time_preference": {
                         "type": "string",
                         "description": "The caller's preferred time of day, e.g. 'morning', 'afternoon', '3pm'.",
                     },
-                    "business_id": {
-                        "type": ["integer", "null"],
-                        "description": (
-                            "If the user specifies a location, provide the business_id. If they "
-                            "want the earliest slot anywhere, omit this or pass null to search "
-                            "all branches."
-                        ),
-                    },
                 },
-                "required": ["start_date", "end_date", "time_preference"],
+                "required": [
+                    "business_id",
+                    "practitioner_id",
+                    "appointment_type_id",
+                    "start_date",
+                    "end_date",
+                    "time_preference",
+                ],
             },
         },
     },
@@ -83,9 +115,8 @@ TOOLS: list[dict[str, Any]] = [
                     "practitioner_id": {
                         "type": "integer",
                         "description": (
-                            "The Cliniko practitioner ID. Reuse the practitioner_id from the "
-                            "check_availability result you just confirmed with the caller. If "
-                            "you are ever unsure which practitioner to use, default to 1."
+                            "The Cliniko practitioner ID. Must be the exact practitioner_id "
+                            "you just confirmed availability for — never guess."
                         ),
                     },
                     "appointment_type_id": {
@@ -98,17 +129,78 @@ TOOLS: list[dict[str, Any]] = [
                     "business_id": {
                         "type": "integer",
                         "description": (
-                            "The Cliniko business ID for the branch the appointment is booked "
-                            "at. Reuse the business_id from the check_availability result you "
-                            "just confirmed with the caller (or from the branch list in your "
-                            "context if the caller named a specific branch). If you are ever "
-                            "unsure, default to 1."
+                            "The Cliniko business ID for the branch. Must be the exact "
+                            "business_id you just confirmed availability for — never guess."
                         ),
                     },
                     "start_time": {"type": "string", "description": "ISO 8601 appointment start time."},
                     "end_time": {"type": "string", "description": "ISO 8601 appointment end time."},
                 },
-                "required": ["first_name", "last_name", "phone_number", "start_time"],
+                "required": [
+                    "first_name",
+                    "last_name",
+                    "phone_number",
+                    "practitioner_id",
+                    "appointment_type_id",
+                    "business_id",
+                    "start_time",
+                ],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "reschedule_appointment",
+            "description": (
+                "Atomically move an existing appointment to a new slot: books the new slot "
+                "first, and only cancels the old appointment if the new booking succeeds, "
+                "so the caller is never left with nothing booked. Use this instead of "
+                "calling cancel_appointment and book_appointment separately."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "old_appointment_id": {
+                        "type": "integer",
+                        "description": (
+                            "The Cliniko individual appointment ID being replaced, from "
+                            "get_patient_appointments."
+                        ),
+                    },
+                    "first_name": {"type": "string", "description": "The caller's first name."},
+                    "last_name": {"type": "string", "description": "The caller's last name."},
+                    "phone_number": {"type": "string", "description": "The caller's phone number."},
+                    "business_id": {
+                        "type": "integer",
+                        "description": (
+                            "The Cliniko business ID for the new slot's branch — never guess."
+                        ),
+                    },
+                    "practitioner_id": {
+                        "type": "integer",
+                        "description": "The Cliniko practitioner ID for the new slot — never guess.",
+                    },
+                    "appointment_type_id": {
+                        "type": "integer",
+                        "description": "The Cliniko appointment type ID for the new slot's service.",
+                    },
+                    "start_time": {
+                        "type": "string",
+                        "description": "ISO 8601 start time of the new slot.",
+                    },
+                    "end_time": {"type": "string", "description": "ISO 8601 end time of the new slot."},
+                },
+                "required": [
+                    "old_appointment_id",
+                    "first_name",
+                    "last_name",
+                    "phone_number",
+                    "business_id",
+                    "practitioner_id",
+                    "appointment_type_id",
+                    "start_time",
+                ],
             },
         },
     },
@@ -216,28 +308,18 @@ class LlmClient:
         start = time.monotonic()
         try:
             if name == "check_availability":
-                # TEMPORARY MOCK: real availability lookups require practitioner/schedule
-                # IDs that aren't configured in Cliniko yet, so short-circuit with one
-                # fake open slot (tomorrow 2pm-2:30pm UTC) instead of calling Cliniko.
-                # TODO: remove this mock and restore the call below once schedules are set up.
-                # result = await cliniko_client.get_appointments(
-                #     start_date=arguments["start_date"],
-                #     end_date=arguments["end_date"],
-                #     business_id=arguments.get("business_id"),
-                # )
-                tomorrow = (datetime.now(timezone.utc) + timedelta(days=1)).strftime("%Y-%m-%d")
-                result = {
-                    "individual_appointments": [
-                        {
-                            "business_id": arguments.get("business_id") or 1,
-                            "practitioner_id": 1,
-                            "starts_at": f"{tomorrow}T14:00:00Z",
-                            "ends_at": f"{tomorrow}T14:30:00Z",
-                        }
-                    ]
-                }
+                available_times = await cliniko_client.get_available_times(
+                    business_id=arguments["business_id"],
+                    practitioner_id=arguments["practitioner_id"],
+                    appointment_type_id=arguments["appointment_type_id"],
+                    from_date=arguments["start_date"].split("T")[0],
+                    to_date=arguments["end_date"].split("T")[0],
+                )
+                result = {"available_times": available_times}
             elif name == "book_appointment":
                 result = await self._book_appointment(arguments)
+            elif name == "reschedule_appointment":
+                result = await self._reschedule_appointment(arguments)
             elif name == "cancel_appointment":
                 success = await cliniko_client.cancel_appointment(arguments["appointment_id"])
                 result = {"cancelled": success}
@@ -280,18 +362,26 @@ class LlmClient:
         )
         return await cliniko_client.create_patient(first_name, last_name, phone_number)
 
+    async def _compute_end_time(self, start_time: str, appointment_type_id: int) -> str:
+        """Derive end_time from the service's real duration — never a guessed length."""
+        appointment_types = await cliniko_client.get_appointment_types()
+        duration = next(
+            (t["duration_in_minutes"] for t in appointment_types if t["id"] == appointment_type_id),
+            None,
+        )
+        if duration is None:
+            raise ClinikoAPIError(f"Unknown appointment_type_id {appointment_type_id}")
+        start_dt = datetime.fromisoformat(start_time.replace("Z", "+00:00"))
+        return (start_dt + timedelta(minutes=duration)).isoformat().replace("+00:00", "Z")
+
     async def _book_appointment(self, arguments: dict[str, Any]) -> dict[str, Any]:
-        # business_id/practitioner_id/appointment_type_id/end_time are no longer required
-        # in the tool schema (Groq's strict function-calling was erroring out when the
-        # model hesitated over them), so default them here rather than KeyError-ing.
-        business_id = arguments.get("business_id") or 1  # 1 = Downtown Clinic
-        practitioner_id = arguments.get("practitioner_id") or 1
-        appointment_type_id = arguments.get("appointment_type_id") or 1
+        business_id = arguments["business_id"]
+        practitioner_id = arguments["practitioner_id"]
+        appointment_type_id = arguments["appointment_type_id"]
         start_time = arguments["start_time"]
-        end_time = arguments.get("end_time")
-        if not end_time:
-            start_dt = datetime.fromisoformat(start_time.replace("Z", "+00:00"))
-            end_time = (start_dt + timedelta(minutes=30)).isoformat().replace("+00:00", "Z")
+        end_time = arguments.get("end_time") or await self._compute_end_time(
+            start_time, appointment_type_id
+        )
 
         lock_acquired = await db.acquire_slot_lock(start_time, business_id, practitioner_id)
         if not lock_acquired:
@@ -313,6 +403,89 @@ class LlmClient:
             start_time=start_time,
             end_time=end_time,
         )
+
+    async def _reschedule_appointment(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        """Atomic reschedule: lock new slot -> book new -> cancel old only on success -> release lock.
+
+        This ordering means a failure at any point never loses the caller's original
+        appointment — it's only ever cancelled after the replacement is confirmed booked.
+        """
+        old_appointment_id = arguments["old_appointment_id"]
+        business_id = arguments["business_id"]
+        practitioner_id = arguments["practitioner_id"]
+        appointment_type_id = arguments["appointment_type_id"]
+        start_time = arguments["start_time"]
+        end_time = arguments.get("end_time") or await self._compute_end_time(
+            start_time, appointment_type_id
+        )
+
+        # 1. Lock the new slot.
+        lock_acquired = await db.acquire_slot_lock(start_time, business_id, practitioner_id)
+        if not lock_acquired:
+            return {
+                "error": (
+                    "Race condition detected. The new slot was just booked by another user. "
+                    "The caller's original appointment is untouched. Apologize and offer "
+                    "another time."
+                )
+            }
+
+        # 2. Book the new appointment before touching the old one.
+        try:
+            patient_id = await self._resolve_patient_id(
+                arguments["first_name"], arguments["last_name"], arguments["phone_number"]
+            )
+            new_appointment = await cliniko_client.book_appointment(
+                patient_id=patient_id,
+                practitioner_id=practitioner_id,
+                appointment_type_id=appointment_type_id,
+                business_id=business_id,
+                start_time=start_time,
+                end_time=end_time,
+            )
+        except ClinikoAPIError as exc:
+            await db.release_slot_lock(start_time, business_id, practitioner_id)
+            logger.error(
+                "Reschedule failed to book new slot; old appointment %s left intact: %s",
+                old_appointment_id,
+                exc,
+            )
+            return {
+                "error": (
+                    "Could not book the new slot, so the original appointment was left in "
+                    "place and was NOT cancelled. Apologize and offer to try a different time."
+                )
+            }
+
+        # 3. New slot is confirmed booked — only now cancel the old appointment.
+        try:
+            await cliniko_client.cancel_appointment(old_appointment_id)
+        except ClinikoAPIError as exc:
+            logger.error(
+                "Reschedule booked new appointment but failed to cancel old appointment %s: %s",
+                old_appointment_id,
+                exc,
+            )
+            # 4. Release the lock regardless — Cliniko is now the source of truth for the
+            # new slot, and holding the lock forever would block it from ever being reused.
+            await db.release_slot_lock(start_time, business_id, practitioner_id)
+            return {
+                "new_appointment": new_appointment,
+                "warning": (
+                    "The new appointment was booked successfully, but the OLD appointment "
+                    f"(id {old_appointment_id}) could NOT be cancelled automatically. Tell "
+                    "the caller they currently have two appointments and that clinic staff "
+                    "will follow up to cancel the old one."
+                ),
+            }
+
+        # 4. Both steps succeeded — release the lock.
+        await db.release_slot_lock(start_time, business_id, practitioner_id)
+        return {
+            "rescheduled": True,
+            "new_appointment": new_appointment,
+            "old_appointment_id": old_appointment_id,
+        }
 
     def _finalize_tool_calls(self, tool_calls_acc: dict[int, dict[str, Any]]) -> list[dict[str, Any]]:
         return [

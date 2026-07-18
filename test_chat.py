@@ -10,8 +10,10 @@ Usage:
 """
 
 import asyncio
+from datetime import datetime
 from typing import Any
 
+from app.services.cliniko import ClinikoAPIError, cliniko_client
 from app.services.db import db
 from app.services.llm import LlmClient
 
@@ -43,6 +45,46 @@ class MockWebSocket:
         self.buffer = ""
 
 
+async def build_clinic_context() -> str:
+    """Mirror the real context websocket.py builds for a call — real Cliniko IDs, not
+    hardcoded placeholders, since check_availability/book_appointment now 404 on fake ones."""
+    context_parts = [f"Today is {datetime.now().strftime('%A, %B %d, %Y, %I:%M %p')}."]
+
+    try:
+        appointment_types = await cliniko_client.get_appointment_types()
+    except ClinikoAPIError as exc:
+        print(f"[warning] Could not load appointment types from Cliniko: {exc}")
+        appointment_types = []
+    if appointment_types:
+        services = ", ".join(
+            f'ID "{str(t["id"])}" ({t["name"]}, {t["duration_in_minutes"]} mins)'
+            for t in appointment_types
+        )
+        context_parts.append(f"The clinic offers the following services: {services}.")
+
+    try:
+        businesses = await cliniko_client.get_businesses()
+    except ClinikoAPIError as exc:
+        print(f"[warning] Could not load branches from Cliniko: {exc}")
+        businesses = []
+    if businesses:
+        branches = ", ".join(f'ID "{str(b["id"])}" ({b["name"]})' for b in businesses)
+        context_parts.append(f"The clinic has the following locations (branches): {branches}.")
+
+    try:
+        practitioners = await cliniko_client.get_practitioners()
+    except ClinikoAPIError as exc:
+        print(f"[warning] Could not load practitioners from Cliniko: {exc}")
+        practitioners = []
+    if practitioners:
+        doctors = ", ".join(
+            f'ID "{str(p["id"])}" ({p["first_name"]} {p["last_name"]})' for p in practitioners
+        )
+        context_parts.append(f"The clinic's practitioners are: {doctors}.")
+
+    return " ".join(context_parts)
+
+
 async def main() -> None:
     llm_client = LlmClient()
     mock_ws = MockWebSocket()
@@ -57,8 +99,10 @@ async def main() -> None:
     llm_client._execute_tool = logging_execute_tool
 
     await db.init_db()
+    clinic_context = await build_clinic_context()
 
     print("2care.ai voice agent — text chat harness. Type 'exit' to quit.\n")
+    print(f"[clinic context] {clinic_context}\n")
 
     transcript: list[dict[str, str]] = []
     response_id = 0
@@ -77,12 +121,7 @@ async def main() -> None:
 
         mock_ws.reset_turn()
         print("Agent: ", end="", flush=True)
-        await llm_client.draft_response(
-            request,
-            mock_ws,
-            clinic_context="Today's date is 2026-07-18. Available branches: ID 1 (Downtown Clinic), "
-            "ID 2 (Uptown Clinic).",
-        )
+        await llm_client.draft_response(request, mock_ws, clinic_context=clinic_context)
         print()
 
         transcript.append({"role": "agent", "content": mock_ws.buffer})
