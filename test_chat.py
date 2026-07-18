@@ -12,6 +12,7 @@ Usage:
 import asyncio
 from typing import Any
 
+from app.services.db import db
 from app.services.llm import LlmClient
 
 
@@ -55,6 +56,8 @@ async def main() -> None:
 
     llm_client._execute_tool = logging_execute_tool
 
+    await db.init_db()
+
     print("2care.ai voice agent — text chat harness. Type 'exit' to quit.\n")
 
     transcript: list[dict[str, str]] = []
@@ -64,6 +67,8 @@ async def main() -> None:
         user_input = input("\nYou: ")
         if user_input.strip().lower() == "exit":
             break
+        if not user_input.strip():
+            continue
 
         transcript.append({"role": "user", "content": user_input})
         response_id += 1

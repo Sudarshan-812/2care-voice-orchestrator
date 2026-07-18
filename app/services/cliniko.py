@@ -115,7 +115,10 @@ class ClinikoClient:
         ]
         if business_id is not None:
             params.append(("q[]", f"business_id:{business_id}"))
-        return await self._request("GET", "/individual_appointments", params=params)
+        data = await self._request("GET", "/individual_appointments", params=params)
+        data.pop("links", None)
+        data.pop("total_entries", None)
+        return data
 
     async def book_appointment(
         self,
@@ -185,6 +188,19 @@ class ClinikoClient:
     async def get_patients_by_phone(self, phone_number: str) -> list[dict[str, Any]]:
         """Look up patients whose phone number contains the given number."""
         params = [("q[]", f"phone_numbers.number:contains:{phone_number}")]
+        data = await self._request("GET", "/patients", params=params)
+        patients = data.get("patients", [])
+        return [
+            {"id": patient.get("id"), "first_name": patient.get("first_name"), "last_name": patient.get("last_name")}
+            for patient in patients
+        ]
+
+    async def get_patients_by_name(self, first_name: str, last_name: str) -> list[dict[str, Any]]:
+        """Look up patients by first and last name (phone_numbers.number is not a filterable field)."""
+        params = [
+            ("q[]", f"first_name:{first_name}"),
+            ("q[]", f"last_name:{last_name}"),
+        ]
         data = await self._request("GET", "/patients", params=params)
         patients = data.get("patients", [])
         return [
