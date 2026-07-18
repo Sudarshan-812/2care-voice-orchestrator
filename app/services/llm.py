@@ -21,6 +21,8 @@ SYSTEM_PROMPT = """You are a receptionist for a multi-branch clinic.
 - If the caller changes their requested time at any point, you MUST call `check_availability` again for the new time. Do not rely on the results of a previous `check_availability` call.
 - You must only book appointments for the services listed in your context. Use the exact appointment_type_id provided.
 - You manage bookings across multiple branches. The available branches are listed in your context. When a user asks for the earliest slot, you MUST check availability across ALL branches if they do not specify one, and explicitly tell them which branch has the opening.
+- If the caller wants to cancel or reschedule an existing appointment and you do not already know its appointment_id, call `get_patient_appointments` first to look up their bookings and confirm which one they mean before acting.
+- To reschedule an appointment, you MUST first call `cancel_appointment` on the existing appointment, and only then call `check_availability` and `book_appointment` for the new slot. Never book the new slot before the old one is cancelled.
 """
 
 TOOLS: list[dict[str, Any]] = [
@@ -105,6 +107,46 @@ TOOLS: list[dict[str, Any]] = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "cancel_appointment",
+            "description": (
+                "Cancel an existing individual appointment. When rescheduling, call this "
+                "first on the old appointment before booking the new slot."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "appointment_id": {
+                        "type": "integer",
+                        "description": "The Cliniko individual appointment ID to cancel.",
+                    },
+                },
+                "required": ["appointment_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_patient_appointments",
+            "description": (
+                "Look up a patient's existing appointments. Use this to find the "
+                "appointment_id before cancelling or rescheduling a booking."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "patient_id": {
+                        "type": "integer",
+                        "description": "The Cliniko patient ID whose appointments to look up.",
+                    },
+                },
+                "required": ["patient_id"],
+            },
+        },
+    },
 ]
 
 ROLE_MAP = {"agent": "assistant", "user": "user"}
@@ -176,6 +218,11 @@ class LlmClient:
                 )
             elif name == "book_appointment":
                 result = await self._book_appointment(arguments)
+            elif name == "cancel_appointment":
+                success = await cliniko_client.cancel_appointment(arguments["appointment_id"])
+                result = {"cancelled": success}
+            elif name == "get_patient_appointments":
+                result = await cliniko_client.get_patient_appointments(arguments["patient_id"])
             else:
                 logger.warning("Unknown tool requested by model: %s", name)
                 result = {"error": f"Unknown tool: {name}"}

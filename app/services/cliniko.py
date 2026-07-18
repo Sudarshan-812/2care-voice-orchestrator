@@ -137,6 +137,51 @@ class ClinikoClient:
         }
         return await self._request("POST", "/individual_appointments", json=payload)
 
+    async def cancel_appointment(self, appointment_id: int) -> bool:
+        """Cancel (delete) an individual appointment. Returns True on success."""
+        client = self.get_client()
+        started_at = datetime.now(timezone.utc)
+        start = time.monotonic()
+        path = f"/individual_appointments/{appointment_id}"
+
+        try:
+            response = await client.request("DELETE", path)
+        except httpx.RequestError as exc:
+            elapsed_ms = (time.monotonic() - start) * 1000
+            logger.error(
+                "Cliniko API request failed: DELETE %s (%.1fms) at %s | error=%s",
+                path,
+                elapsed_ms,
+                started_at.isoformat(),
+                exc,
+            )
+            raise ClinikoAPIError(f"Cliniko API request failed for DELETE {path}: {exc}") from exc
+
+        elapsed_ms = (time.monotonic() - start) * 1000
+        logger.info(
+            "Cliniko API DELETE %s -> %s (%.1fms) at %s",
+            path,
+            response.status_code,
+            elapsed_ms,
+            started_at.isoformat(),
+        )
+
+        if response.status_code in (200, 204):
+            return True
+
+        logger.error(
+            "Cliniko API error: DELETE %s -> %s | body=%s", path, response.status_code, response.text
+        )
+        raise ClinikoAPIError(
+            f"Cliniko API returned {response.status_code} for DELETE {path}",
+            status_code=response.status_code,
+        )
+
+    async def get_patient_appointments(self, patient_id: int) -> dict[str, Any]:
+        """Fetch a patient's individual appointments."""
+        params = [("q[]", f"patient_id:{patient_id}")]
+        return await self._request("GET", "/individual_appointments", params=params)
+
     async def get_patients_by_phone(self, phone_number: str) -> list[dict[str, Any]]:
         """Look up patients whose phone number contains the given number."""
         params = [("q[]", f"phone_numbers.number:contains:{phone_number}")]
