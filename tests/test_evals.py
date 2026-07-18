@@ -87,8 +87,8 @@ async def test_eval_cross_branch_search(monkeypatch):
         f"Assembled response: {assembled_text(mock_ws)!r}"
     )
 
-    checked_business_ids = {call.get("business_id") for call in availability_calls}
-    assert checked_business_ids == {1, 2}, (
+    checked_business_ids = {str(call.get("business_id")) for call in availability_calls}
+    assert checked_business_ids == {"1", "2"}, (
         "business_id is now required on check_availability — there's no 'search all "
         "branches' shorthand, so the model must call it once per known branch. Expected "
         f"business_ids {{1, 2}}, got {checked_business_ids}. Calls: {json.dumps(availability_calls)}"
@@ -152,7 +152,7 @@ async def test_eval_code_switching(monkeypatch):
     )
     tool_args = availability_calls[0]
     assert tool_args.get("time_preference", "").lower() == "afternoon"
-    assert tool_args.get("business_id") == 1
+    assert str(tool_args.get("business_id")) == "1"
     assert tool_args.get("practitioner_id") is not None
     assert tool_args.get("appointment_type_id") is not None
     assert tomorrow in tool_args.get("start_date", ""), (

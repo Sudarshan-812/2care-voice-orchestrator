@@ -46,24 +46,27 @@ TOOLS: list[dict[str, Any]] = [
                 "type": "object",
                 "properties": {
                     "business_id": {
-                        "type": "integer",
+                        "type": "string",
                         "description": (
-                            "The Cliniko business ID for the branch to check, taken exactly "
-                            "from the branch list in your context."
+                            "The Cliniko business ID for the branch to check, copied exactly "
+                            "as a string (including all digits) from the branch list in your "
+                            "context. These IDs are large numbers — never round or shorten them."
                         ),
                     },
                     "practitioner_id": {
-                        "type": "integer",
+                        "type": "string",
                         "description": (
-                            "The Cliniko practitioner ID for the doctor to check, taken "
-                            "exactly from the practitioner list in your context."
+                            "The Cliniko practitioner ID for the doctor to check, copied "
+                            "exactly as a string (including all digits) from the practitioner "
+                            "list in your context. Never round or shorten it."
                         ),
                     },
                     "appointment_type_id": {
-                        "type": "integer",
+                        "type": "string",
                         "description": (
                             "The Cliniko appointment type ID for the requested service, "
-                            "taken exactly from the service list in your context."
+                            "copied exactly as a string (including all digits) from the "
+                            "service list in your context. Never round or shorten it."
                         ),
                     },
                     "start_date": {
@@ -113,24 +116,27 @@ TOOLS: list[dict[str, Any]] = [
                     "last_name": {"type": "string", "description": "The caller's last name."},
                     "phone_number": {"type": "string", "description": "The caller's phone number."},
                     "practitioner_id": {
-                        "type": "integer",
+                        "type": "string",
                         "description": (
-                            "The Cliniko practitioner ID. Must be the exact practitioner_id "
-                            "you just confirmed availability for — never guess."
+                            "The Cliniko practitioner ID, as a string with every digit. Must "
+                            "be the exact practitioner_id you just confirmed availability for "
+                            "— never guess, round, or shorten it."
                         ),
                     },
                     "appointment_type_id": {
-                        "type": "integer",
+                        "type": "string",
                         "description": (
-                            "The Cliniko appointment type ID for the requested service, taken "
-                            "exactly from the list of services provided in your context."
+                            "The Cliniko appointment type ID for the requested service, as a "
+                            "string with every digit, taken exactly from the list of services "
+                            "provided in your context."
                         ),
                     },
                     "business_id": {
-                        "type": "integer",
+                        "type": "string",
                         "description": (
-                            "The Cliniko business ID for the branch. Must be the exact "
-                            "business_id you just confirmed availability for — never guess."
+                            "The Cliniko business ID for the branch, as a string with every "
+                            "digit. Must be the exact business_id you just confirmed "
+                            "availability for — never guess, round, or shorten it."
                         ),
                     },
                     "start_time": {"type": "string", "description": "ISO 8601 appointment start time."},
@@ -162,28 +168,35 @@ TOOLS: list[dict[str, Any]] = [
                 "type": "object",
                 "properties": {
                     "old_appointment_id": {
-                        "type": "integer",
+                        "type": "string",
                         "description": (
-                            "The Cliniko individual appointment ID being replaced, from "
-                            "get_patient_appointments."
+                            "The Cliniko individual appointment ID being replaced, as a string "
+                            "with every digit, from get_patient_appointments."
                         ),
                     },
                     "first_name": {"type": "string", "description": "The caller's first name."},
                     "last_name": {"type": "string", "description": "The caller's last name."},
                     "phone_number": {"type": "string", "description": "The caller's phone number."},
                     "business_id": {
-                        "type": "integer",
+                        "type": "string",
                         "description": (
-                            "The Cliniko business ID for the new slot's branch — never guess."
+                            "The Cliniko business ID for the new slot's branch, as a string "
+                            "with every digit — never guess, round, or shorten it."
                         ),
                     },
                     "practitioner_id": {
-                        "type": "integer",
-                        "description": "The Cliniko practitioner ID for the new slot — never guess.",
+                        "type": "string",
+                        "description": (
+                            "The Cliniko practitioner ID for the new slot, as a string with "
+                            "every digit — never guess, round, or shorten it."
+                        ),
                     },
                     "appointment_type_id": {
-                        "type": "integer",
-                        "description": "The Cliniko appointment type ID for the new slot's service.",
+                        "type": "string",
+                        "description": (
+                            "The Cliniko appointment type ID for the new slot's service, as a "
+                            "string with every digit."
+                        ),
                     },
                     "start_time": {
                         "type": "string",
@@ -216,8 +229,11 @@ TOOLS: list[dict[str, Any]] = [
                 "type": "object",
                 "properties": {
                     "appointment_id": {
-                        "type": "integer",
-                        "description": "The Cliniko individual appointment ID to cancel.",
+                        "type": "string",
+                        "description": (
+                            "The Cliniko individual appointment ID to cancel, as a string "
+                            "with every digit — never guess, round, or shorten it."
+                        ),
                     },
                 },
                 "required": ["appointment_id"],
@@ -236,8 +252,11 @@ TOOLS: list[dict[str, Any]] = [
                 "type": "object",
                 "properties": {
                     "patient_id": {
-                        "type": "integer",
-                        "description": "The Cliniko patient ID whose appointments to look up.",
+                        "type": "string",
+                        "description": (
+                            "The Cliniko patient ID whose appointments to look up, as a "
+                            "string with every digit."
+                        ),
                     },
                 },
                 "required": ["patient_id"],
@@ -309,9 +328,9 @@ class LlmClient:
         try:
             if name == "check_availability":
                 available_times = await cliniko_client.get_available_times(
-                    business_id=arguments["business_id"],
-                    practitioner_id=arguments["practitioner_id"],
-                    appointment_type_id=arguments["appointment_type_id"],
+                    business_id=int(arguments["business_id"]),
+                    practitioner_id=int(arguments["practitioner_id"]),
+                    appointment_type_id=int(arguments["appointment_type_id"]),
                     from_date=arguments["start_date"].split("T")[0],
                     to_date=arguments["end_date"].split("T")[0],
                 )
@@ -321,10 +340,10 @@ class LlmClient:
             elif name == "reschedule_appointment":
                 result = await self._reschedule_appointment(arguments)
             elif name == "cancel_appointment":
-                success = await cliniko_client.cancel_appointment(arguments["appointment_id"])
+                success = await cliniko_client.cancel_appointment(int(arguments["appointment_id"]))
                 result = {"cancelled": success}
             elif name == "get_patient_appointments":
-                result = await cliniko_client.get_patient_appointments(arguments["patient_id"])
+                result = await cliniko_client.get_patient_appointments(int(arguments["patient_id"]))
             else:
                 logger.warning("Unknown tool requested by model: %s", name)
                 result = {"error": f"Unknown tool: {name}"}
@@ -375,9 +394,9 @@ class LlmClient:
         return (start_dt + timedelta(minutes=duration)).isoformat().replace("+00:00", "Z")
 
     async def _book_appointment(self, arguments: dict[str, Any]) -> dict[str, Any]:
-        business_id = arguments["business_id"]
-        practitioner_id = arguments["practitioner_id"]
-        appointment_type_id = arguments["appointment_type_id"]
+        business_id = int(arguments["business_id"])
+        practitioner_id = int(arguments["practitioner_id"])
+        appointment_type_id = int(arguments["appointment_type_id"])
         start_time = arguments["start_time"]
         end_time = arguments.get("end_time") or await self._compute_end_time(
             start_time, appointment_type_id
@@ -410,10 +429,10 @@ class LlmClient:
         This ordering means a failure at any point never loses the caller's original
         appointment — it's only ever cancelled after the replacement is confirmed booked.
         """
-        old_appointment_id = arguments["old_appointment_id"]
-        business_id = arguments["business_id"]
-        practitioner_id = arguments["practitioner_id"]
-        appointment_type_id = arguments["appointment_type_id"]
+        old_appointment_id = int(arguments["old_appointment_id"])
+        business_id = int(arguments["business_id"])
+        practitioner_id = int(arguments["practitioner_id"])
+        appointment_type_id = int(arguments["appointment_type_id"])
         start_time = arguments["start_time"]
         end_time = arguments.get("end_time") or await self._compute_end_time(
             start_time, appointment_type_id

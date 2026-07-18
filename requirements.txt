@@ -9,3 +9,4 @@ asyncpg
 pytest
 pytest-asyncio
 langsmith
+pyyaml

@@ -132,7 +132,24 @@ class ClinikoClient:
             f"/businesses/{business_id}/practitioners/{practitioner_id}"
             f"/appointment_types/{appointment_type_id}/available_times"
         )
-        data = await self._request("GET", path, params={"from": from_date, "to": to_date})
+        try:
+            data = await self._request("GET", path, params={"from": from_date, "to": to_date})
+        except ClinikoAPIError as exc:
+            if exc.status_code == 404:
+                # Cliniko 404s this endpoint (instead of returning an empty list) when the
+                # practitioner has no working-hours schedule configured for this business/
+                # appointment type combination. Treat that as "no slots" rather than
+                # propagating a raw error the LLM tends to choke on mid tool-call generation.
+                logger.info(
+                    "No schedule found for %s (business=%s, practitioner=%s, appointment_type=%s); "
+                    "treating as no available slots",
+                    path,
+                    business_id,
+                    practitioner_id,
+                    appointment_type_id,
+                )
+                return []
+            raise
         return data.get("available_times", [])
 
     async def book_appointment(

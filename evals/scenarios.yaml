@@ -1,0 +1,76 @@
+# Tier 1 — text-level scenario suite (CI, fast).
+#
+# Each scenario drives LlmClient.draft_response directly (no Retell/telephony layer,
+# no real Cliniko/Postgres — cliniko/db calls are stubbed via LlmClient._execute_tool)
+# and asserts which tools get called, in what order, and which must NOT be called.
+#
+# user_turns are fed one at a time, in order, with the agent's own reply folded back
+# into the transcript between turns — the same way a real multi-turn call behaves.
+# clinic_context mirrors what websocket.py assembles for a real call: today's date,
+# branches, practitioners, and services, all with the string-typed IDs the LLM tools
+# now expect (see app/services/llm.py).
+
+- name: "Happy Path"
+  description: >
+    Caller gives their name, branch, practitioner, service, and time across two turns
+    (state it, then confirm booking once a slot is offered). Expect check_availability
+    followed by book_appointment.
+  clinic_context: >
+    Today's date is 2026-07-18. Branches: ID "1" (Downtown Clinic). Practitioners:
+    ID "10" (Dr. Asha Rao). Services: ID "20" (General Consultation, 30 mins).
+  user_turns:
+    - >
+      Hi, my name is Priya Verma, phone number 9876543210. I'd like a General
+      Consultation with Dr. Asha Rao at Downtown Clinic, tomorrow afternoon.
+    - "Yes, please go ahead and book that slot."
+  mock_tool_results:
+    check_availability:
+      available_times:
+        - appointment_start: "2026-07-19T14:00:00+00:00"
+    book_appointment:
+      id: "999"
+      patient_id: "888"
+  expected_tool_sequence:
+    - check_availability
+    - book_appointment
+  forbidden_tools: []
+
+- name: "Missing Context"
+  description: >
+    Caller gives no branch, practitioner, or service — just a vague request. The agent
+    must ask clarifying questions and must NOT call check_availability with guessed IDs.
+  clinic_context: >
+    Today's date is 2026-07-18. Branches: ID "1" (Downtown Clinic), ID "2" (Uptown
+    Clinic). Practitioners: ID "10" (Dr. Asha Rao), ID "11" (Dr. Vikram Nair).
+    Services: ID "20" (General Consultation, 30 mins), ID "21" (Follow-up, 15 mins).
+  user_turns:
+    - "Book an appointment for tomorrow."
+  mock_tool_results: {}
+  expected_tool_sequence: []
+  forbidden_tools:
+    - check_availability
+    - book_appointment
+  content_checks:
+    any_of: ["?"]
+
+- name: "API Outage"
+  description: >
+    Caller gives full details, but check_availability comes back with zero slots
+    (e.g. the practitioner has no availability, or the API/schedule is unreachable).
+    The agent must apologize gracefully and must NOT call book_appointment.
+  clinic_context: >
+    Today's date is 2026-07-18. Branches: ID "1" (Downtown Clinic). Practitioners:
+    ID "10" (Dr. Asha Rao). Services: ID "20" (General Consultation, 30 mins).
+  user_turns:
+    - >
+      Hi, I'm Priya Verma, phone number 9876543210. I'd like a General Consultation
+      with Dr. Asha Rao at Downtown Clinic, tomorrow afternoon.
+  mock_tool_results:
+    check_availability:
+      available_times: []
+  expected_tool_sequence:
+    - check_availability
+  forbidden_tools:
+    - book_appointment
+  content_checks:
+    any_of: ["sorry", "apolog", "unfortunately", "unable", "no availab", "don't have"]
