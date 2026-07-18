@@ -1,7 +1,7 @@
 """Automated evaluation harness for the Retell/GPT-4o agent's prompt behavior.
 
 These are *evals*, not unit tests: they make real calls to Groq's
-llama-3.1-70b-versatile via LlmClient.draft_response to prove the live
+llama-3.3-70b-versatile via LlmClient.draft_response to prove the live
 prompt + tool-schema combination still behaves correctly before it ships.
 A real GROQ_API_KEY is required (see tests/conftest.py, which currently
 seeds a dummy value that will cause these evals to fail auth against the
